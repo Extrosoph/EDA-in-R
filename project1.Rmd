@@ -1,0 +1,415 @@
+---
+title: "CITS4009 - Project 1 Exploratory Data Analysis"
+author: "[22764884] Theoridho ANDILY"
+date: "2022-08-09"
+output: html_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(treemapify)
+library(gridExtra)
+library(ggplot2)
+library(gtable)
+library(ggpubr)
+library(dplyr)
+library(grid)
+```
+
+# Data Interpretation and Data Cleaning
+
+## Data reading/transformation and short overview
+
+Data Chosen: **us_data_2000.csv**
+
+It is important to understand the data before doing any data cleaning, exploration and  transformation. The project provided a data_dictionary csv which included the explanation of each column in the 2000 data set. Firstly open the file in excel to get a quick overview and it seems to be a collection of tables from a SQL database which includes the primary key ids, type, length and field description separated by a '|'. The important columns in for EDA is the COLUMNS_NAME and FIELD_DESCRIPTION. To read the csv, the read.table() function is used with '|' as a separator, set the row name to be the second row, keep the second and final column only with c("NULL", "character", "NULL", "NULL", "character"). Certain R code output from function such as str() and summary() has been omitted from HTML for less clutter.
+
+```{r results="hide"}
+data_description <- read.table(file = "data_dictionary.csv", sep = '|', row.names = 2, colClasses = c("NULL", "character", "NULL", "NULL", "character"), header = TRUE, quote = "")
+print(data_description)
+```
+This can help to refer to which column is important and their definitions. In this case I find all column which ends with _ID and _CD as those were used to join the tables in the SQL queries using grep(). Then drop those column after reading the data. There were dates data which was converted to date type using as.Date with the format "%d/%m/%Y" for ACCIDENT_DT and "%m/%d/%Y. The different date format could be due to different states recording the data. Some of the data are time signature in HH:MM which is read as an integer. This will need to be converted to a string and apply some padding for hours with single digits for example 900 to "09:00". Then, the DOCUMENT_NO is also not an important column which can be added to the drop_col vector. There are some columns with expected "?" or missing value.
+
+```{r}
+# Find all time column
+time_col <- grep("_TIME", rownames(data_description), value=TRUE)
+```
+
+```{r}
+# Read the data
+small_data <- read.csv(file = "us_data_2000.csv", header = TRUE)
+
+# Apply data transformation to the specific column
+small_data$CAL_QTR <- as.character(small_data$CAL_QTR)
+small_data$FISCAL_QTR <- as.character(small_data$FISCAL_QTR)
+small_data$ACCIDENT_DT <- as.Date(small_data$ACCIDENT_DT, "%d/%m/%Y")
+small_data$RETURN_TO_WORK_DT <- as.Date(small_data$RETURN_TO_WORK_DT, "%m/%d/%Y")
+
+small_data[time_col] <- lapply(small_data[time_col], sprintf, fmt = "%04d")
+small_data[time_col] <- lapply(small_data[time_col], strptime, format = "%H%M")
+small_data[time_col] <- lapply(small_data[time_col], format, format = "%H:%M")
+```
+
+```{r results="hide"}
+str(small_data)
+```
+The str function gives a brief overview of the data and here there are 2000 observations, 57 variables and their respective column name and data type. After the previous small data transformation the data types are suitable for data explorations.
+
+```{r results="hide"}
+summary(small_data)
+```
+
+The summary functions gives a better overview for numerical data as opposed to characters. The significant columns to observe is the NO_INJURIES, TOT_EXPER, MINE_EXPER, JOB_EXPER, SCHEDULE_CHARGE, DAYS_RESTRICT and DAYS_LOST. The number of injuries are generally one but the maximum is 16 which means there was an accident which included 16 reported injuries within an accident. The average total experience is just over 11 years, the average mine experience is 7 years and the average job experience is 7 years. In average the days restricted from work in 10 days while the maximum is 350 years. The average days lost is 23 days with a maximum 500 days. Given how majority of the data is categorical/nominal, the visualization is very limited being most of them will be a bar/column chart.
+
+```{r results="hide"}
+head(small_data)
+```
+ The head function shows the first 6 row of the data and it seems to be as expected with some columns using "?" to mark missing data, some columns have NO VALUE FOUND, while others are just empty cell.
+ 
+
+# Data Exploration
+
+### Exploring Controllers and Operators
+
+
+We can analyse both controllers and operators in a similar way given they are both categorical data, starting with creating a frequency table for each unique instances and then a bar chart of the top 15 for each category. The code below is a function which creates the table and display a bar graph.
+
+```{r}
+display_top_15_barchart <- function(dataset, x_label, y_label, title) {
+  data_full <- data.frame(table(dataset)[order(table(dataset), decreasing = TRUE)])
+  
+  data_top_15 <- data.frame(table(dataset)[order(table(dataset), decreasing = TRUE)[1:15]])
+  data_top_15 <- na.omit(data_top_15)
+  ggplot(data = data_top_15, mapping = aes(x = reorder(dataset, Freq), Freq)) +
+    geom_bar(stat ="identity", fill="darkblue") +
+    coord_flip() +
+    ggtitle(title) +
+    xlab(x_label) +
+    ylab(y_label) +
+    theme(plot.title = element_text(size=15, face="bold")) +
+    geom_text(aes(label = Freq), hjust=1, colour = "white")
+}
+```
+
+Both controllers and operators have a very low mean and 3rd quantile value compared to the max and given the context of the data as count of accidents we want to know more about which company operators and controllers causes the most accidents. 
+```{r}
+display_top_15_barchart(small_data$CONTROLLER_NAME, "Controller`s Name", "Num. of Accidents", "Top 15 Controller`s Accident Count")
+```
+
+```{r}
+display_top_15_barchart(small_data$OPERATOR_NAME, "Operator`s Name", "Num. of Accidents", "Top 15 Operator`s Accident Count")
+```
+Both charts above show a significant difference in the number of accidents between the operators and controllers, while Alliance Resource Partners LP controllers causes over 80 accidents the Jim Walter Resources Inc operators causes over 30 accidents and both being the top in their categories.
+
+```{r fig.width=9}
+counting <- count(small_data, OPERATOR_NAME, CONTROLLER_NAME, sort=TRUE)
+ggplot(data = counting[1:20, ], mapping = aes(x = OPERATOR_NAME, y = CONTROLLER_NAME)) + 
+  geom_tile(mapping = aes(fill = n)) + 
+  xlab("Operator`s Name") +
+  ylab("Controller`s Name") +
+  ggtitle("Top 15 Number of Accidents by both Controller and Operators") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme(plot.title = element_text(size=15, face="bold"))
+```
+
+The chart above shows that Walter Energy Incorporated along with Jim Walter Resources Inc have the highest number of accidents being over roughly 35 with Newmont Mining Corp along Newmont USA Limited being the second highest number of accidents of roughly 30 in total.
+
+### Exploring Accidents by Date and Time
+
+```{r}
+line_graph <- function(data, title, xlabel, ylabel) {
+  year_total_count <- data.frame(table(data))
+  ggplot(data = year_total_count, mapping = aes(x = data, y = Freq, group=1)) +
+    geom_line(color="blue", size=2) +
+    ggtitle(title) +
+    xlab(xlabel) +
+    ylab(ylabel) +
+    theme(plot.title = element_text(size=15, face="bold"))
+  
+}
+```
+
+```{r out.width="50%"}
+line_graph(small_data$CAL_YR, "Total Accidents per year (2000-2015)", "Year", "Num. of Accidents")
+```
+
+There is an obvious overall decline in number of accidents per year from 2000-2015 but massive decline from 2014 to 2015. This massive decline could be due to the final date of the accident recorded was 2015-05-07 which means it was not the full year data. This can be proven with the following stacked column graph. 
+
+```{r}
+ggplot(data=small_data) +
+  geom_bar(aes(x=CAL_YR, fill = CAL_QTR)) +
+  theme(plot.title = element_text(size=15, face="bold")) +
+  labs(title = "Total Accidents per fiscal year (2000-2015) with stacked quarters", x = "Year", y = "Num. of Accidents", fill = "Quarter")
+```
+
+As shown above the 2015 data only goes up to 2015 Q2 but even that is not much.
+
+```{r}
+line_graph(small_data$FISCAL_YR, "Total Accidents per Fiscal year (2000-2015)", "Year", "Num. of Accidents")
+```
+
+The line chart above the total accidents per fiscal year which is the financial year where the end of each year they perform financial statement. In the US (where the data originates) it goes from October 1st to the September 30th of the following year where as Australia is from June 1st to July 30th of the following year.
+
+```{r}
+ggplot(data=small_data) +
+  geom_bar(aes(x=FISCAL_YR, fill = FISCAL_QTR)) +
+  theme(plot.title = element_text(size=15, face="bold")) +
+  labs(title = "Total Accidents per fiscal year (2000-2015) with stacked quarters", x = "Year", y = "Num. of Accidents", fill = "Quarter")
+```
+
+The stacked bar graph shows a different quarter since the data is based on fiscal calendar, the year 2000 is does not have Q1 and the year 2015 does not have Q4.
+
+Overall, both the normal calendar data and the financial year data shows a decline in accidents. In additions, this proves that the company`s accident prevention practice is reducing the number of accidents.
+
+The next important variable to explore is the time variable which is the recorded time the accidents occurred. It would be interesting to figure out what time of the day most of the accidents occurred. In the following code chunks the time is counted and totaled in the n column. Provided there will be NAs in the data set we can ignore it and print the time for the top 15 most accidents counted. 
+
+```{r comment=NA}
+percent <- function(x, digits = 2, format = "f", ...) {
+  paste0(formatC(x * 100, format = format, digits = digits, ...), "%")
+}
+
+total_count <- count(small_data, ACCIDENT_TIME, sort=TRUE)
+count_null <- total_count[rowSums(is.na(total_count)) > 0, ]$n
+percentage_null <- percent((total_count[rowSums(is.na(total_count)) > 0, ]$n/2000))
+cat(sprintf("There are %i null rows in the time column which amount to %s of the total accident recorded and these are ignored.", count_null, percentage_null))
+```
+
+
+```{r comment=NA}
+total_count_unsort <- count(small_data, ACCIDENT_TIME)
+am_accident_count <- total_count_unsort[1:which(total_count_unsort == "11:50"), ]
+total_count_unsort <- count(small_data, ACCIDENT_TIME)
+pm_accident_count <- na.omit(total_count_unsort[which(total_count_unsort == "12:00"):nrow(total_count_unsort), ])
+
+total_am_accident_count <- sum(am_accident_count$n)
+total_pm_accident_count <- sum(pm_accident_count$n)
+percentage_am_accident_count <- percent(total_am_accident_count/(2000-count_null))
+percentage_pm_accident_count <- percent(total_pm_accident_count/(2000-count_null))
+
+cat(sprintf("There are %i accidents at am which amounts to %s of the total accident recorded. ", total_am_accident_count, percentage_am_accident_count))
+cat(sprintf("There are %i accidents at pm which amounts to %s of the total accident recorded.", total_pm_accident_count, percentage_pm_accident_count))
+```
+
+The description above explains that more accidents occurs in the morning than night and the code chunks below shows the spread of the accidents in both pm and am.
+```{r}
+xticks <- c("00:00", "01:00", "02:00", "03:00", "04:00", "05:00", "06:00", "07:00", "08:00", "09:00", "10:00", "11:00", "11:50") 
+
+ggplot(data=am_accident_count, aes(x=ACCIDENT_TIME, y=n)) +
+  geom_bar(stat="identity",  fill="darkblue") + scale_x_discrete(breaks=xticks, labels=xticks) +
+  ggtitle("Total accidents in discrete time slot for AM time") +
+  xlab("Time") + 
+  ylab("Num. of Accidents") +
+  theme(plot.title = element_text(size=15, face="bold"))
+```
+
+Most of the accidents occurred at 10am but in terms of range majority of the accidents occurred between 8am and 11:50am for the morning period.
+
+
+```{r}
+xticks <- c("12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00", "23:55")
+
+ggplot(data=pm_accident_count, aes(x=ACCIDENT_TIME, y=n)) +
+  geom_bar(stat="identity",  fill="darkblue") + scale_x_discrete(breaks=xticks, labels=xticks) +
+  ggtitle("Total accidents in discrete time slot for PM time") +
+  xlab("Time") + 
+  ylab("Num. of Accidents") +
+  theme(plot.title = element_text(size=15, face="bold"))
+```
+
+Most of the accidents occurred at 2pm in terms of range majority occurs between 1pm to 3pm in the afternoon period.
+
+
+```{r}
+display_top_15_barchart(small_data$ACCIDENT_TIME, "Time", "Num. of Accidents", "Top 15 Most Common Accidents Time Recorded")
+```
+
+The bar plot above includes time from both am and pm and clearly most accidents occurred at 10am while 2pm is 2nd highest and 9am as 3rd highest.
+
+### Exploring Injuries
+
+The next variable to explore is the degree of injuries and I used the degree of injuries code since it has ordinal level and much shorter compared to the description. This column includes "?" as missing data which can be removed.
+
+
+```{r comment=NA}
+missing_index <- which(small_data$DEGREE_INJURY_CD == "?")
+length_missing <- length(which(small_data$DEGREE_INJURY_CD == "?"))
+percentage_missing <- percent(length(which(small_data$DEGREE_INJURY_CD == "?"))/2000) 
+
+cat(sprintf("There are %i missing rows in the dergree of injuries column which amount to %s of the total accident recorded and these are ignored.", length_missing, percentage_missing))
+```
+
+```{r fig.width=7.5, fig.height=7.5}
+injuries <- small_data[-missing_index, ] # Ignore missing data
+
+injuries_count <- count(injuries, DEGREE_INJURY_CD)
+injuries_count$DEGREE_INJURY_CD <- as.integer(injuries_count$DEGREE_INJURY_CD)
+injuries_count <- injuries_count[order(injuries_count$DEGREE_INJURY_CD), ]
+injuries_count$DEGREE_INJURY_CD <- as.character(injuries_count$DEGREE_INJURY_CD)
+      
+ggplot(injuries_count, aes(area = n, fill = DEGREE_INJURY_CD, label = n )) +
+  geom_treemap() +
+  geom_treemap_text(colour = "white",
+                    place = "centre",
+                    size = 20) +
+  ggtitle("Total Accident by the Degree of Injury Code") +
+  scale_fill_discrete(breaks=as.character(c(0:10))) +
+  theme(plot.title = element_text(size=15, face="bold")) +
+  labs(fill="Code")
+```
+
+The tree map above shows the degree of injury by codes in order from 1 being fatality, 5 being Days restricted activity only and 10 being all other injury cases. The full description can be seen from the data_dictionary.csv. The top 5 accident counts goes from 3 (Days away from work only) being the most occurred, to 6 (No days away from work, no restrictions), 5, 0 (Accident only) and 4 (Days away from work and restricted activity).
+
+```{r fig.width=7}
+display_top_15_barchart(small_data$INJURY_SOURCE, "Num. of Accident", "Nature of Injury", "Top 15 number of accidents by Source of Injury")
+```
+
+The bar chart above shows that most of the injury are from Metal, NEC(PIPI, WIRE, NAIL) but 238 does not have an assigned value which is 11.9% of the total recorded accidents.
+
+
+```{r}
+Days_lost <- small_data[-which(is.na(small_data$DAYS_LOST)),] # Ignore missing data given that there is 422 NAs from summary()
+ggplot(Days_lost, aes(DEGREE_INJURY, DAYS_LOST)) +
+  geom_jitter() +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle("Degree of Injuries by Days Lost due to Accident") +
+  xlab("Degree of Injuries") +
+  ylab("Days Lost") +
+  theme(plot.title = element_text(size=15, face="bold"))
+```
+
+The chart above shows that obviously the two days away from work degree of injury would have most if not all the days lost count but interestingly some other injuries also has days lost but one that stood out is an accident from occupational illness not deg 1-6. 
+
+### Experience Exploration
+
+```{r}
+experience <- small_data[!is.na(small_data$JOB_EXPER),] # Ignore NAs rows given that there are 328 NAs from summary()
+ggplot(data=experience, aes(JOB_EXPER)) +
+  geom_density() +
+  ylab("Density") +
+  xlab("Total Job Experience (Decimal Year)") +
+  ggtitle("Density chart for Total Job Experince in Decimal Year") + 
+  theme(plot.title = element_text(size=15, face="bold"))
+```
+
+The graph above shows the density of the total job experience of the person affected and it shows that mostly the people with less than 10 years of experience have accidents.
+
+```{r}
+experience <- small_data[!is.na(small_data$TOT_EXPER),] # Ignore NAs rows given that there are 360 NAs from summary()
+ggplot(data=experience, aes(TOT_EXPER)) +
+  geom_density() +
+  ylab("Density") +
+  xlab("Mining Experience (Decimal Year)") +
+  ggtitle("Density chart for Total Mining Experince in Decimal Year") + 
+  theme(plot.title = element_text(size=15, face="bold"))
+```
+
+The graph above shows an overall lower density compared to just job experience but similar trends showing the lower mining experience have higher accident counts while higher mining experience shows a lower accident counts.
+
+### Injury Exploration
+
+```{r fig.width=11, fig.height=8}
+ggplot(small_data, aes(DEGREE_INJURY_CD, CLASSIFICATION_CD)) +
+  geom_count() +
+  ggtitle("Number of Accidents by Degree of Injury against Classification in Codes") +
+  xlab("Degree of Injury Code") +
+  ylab("Classification Code") +
+  theme(plot.title = element_text(size=15, face="bold"))
+```
+
+There are around 200 number of accidents with a classification of 9 with degree of injury as 3 and Degree of Injury as 6. There are around 150 number of accidents with a classification of 9 with a degree of injury as 5, classification of 7 with degree of injury as 0 and  classification of 18 with a degree of injury as 3.
+
+```{r comment=NA}
+get_definitions <- function(df, num, category) {
+  code_column <- paste(category,"_CD", sep="")
+  return (df[which(df[,code_column] == num), category][1])
+}
+
+cat(sprintf("Classification code 9 is defined as %s.\n", get_definitions(small_data, 9, "CLASSIFICATION")))
+cat(sprintf("Classification code 7 is defined as %s.\n", get_definitions(small_data, 7, "CLASSIFICATION")))
+cat(sprintf("Classification code 18 is defined as %s.\n", get_definitions(small_data, 18, "CLASSIFICATION")))
+cat(sprintf("Degree of Injury code 0 is defined as %s.\n", get_definitions(small_data, 0, "DEGREE_INJURY")))
+cat(sprintf("Degree of Injury code 3 is defined as %s.\n", get_definitions(small_data, 3, "DEGREE_INJURY")))
+cat(sprintf("Degree of Injury code 5 is defined as %s.\n", get_definitions(small_data, 5, "DEGREE_INJURY")))
+cat(sprintf("Degree of Injury code 6 is defined as %s.\n", get_definitions(small_data, 6, "DEGREE_INJURY")))
+```
+Using the definitions above to clarify the statement previously stated; there are around 200 accidents caused by handling of materials which resulted in days away from work only and also 200 accidents caused by handling of materials which resulted in no days away from work with no restricted activity. There are around 150 accidents caused by handling of materials which resulted in days restricted activity only, approximately 150 accidents caused by falling of a roof or back which resulted in accidents only and roughly 150 accidents caused by slip or falling which resulted in days away from work only.
+
+```{r comment=NA, fig.align="center"}
+count_injuries <- count(small_data, NO_INJURIES)
+names(count_injuries)[1] <- "Num. Injuries"
+names(count_injuries)[2] <- "Total count"
+
+count_injuries_table <- tableGrob(count_injuries, rows=NULL)
+count_injuries_table <- gtable_add_grob(count_injuries_table,
+        grobs = rectGrob(gp = gpar(fill = NA, lwd = 2)),
+        t = 2, b = nrow(count_injuries_table), l = 1, r = ncol(count_injuries_table))
+count_injuries_table <- gtable_add_grob(count_injuries_table,
+        grobs = rectGrob(gp = gpar(fill = NA, lwd = 2)),
+        t = 1, l = 1, r = ncol(count_injuries_table))
+grid.draw(count_injuries_table)
+```
+
+The table above shows that most accidents have very low injuries count and that only 2 accidents have caused 16 injuries.
+
+
+### Underground Mining Accidents Explorations
+
+```{r comment=NA}
+UG_COUNT <- count(small_data, UG_LOCATION, UG_MINING_METHOD, sort=TRUE)
+no_value_found <- UG_COUNT[1, "n"]
+percent_no_value_found <- percent(no_value_found/2000) 
+
+cat(sprintf("There are %i no values found in both the UG_LOCATION and UG_MINING_METHOD columns which amount to %s of the total accident recorded. This could mean those accidents are on the above ground sites and can be ignored for underground data exploration", no_value_found, percent_no_value_found))
+```
+
+```{r fig.width=9}
+UG_COUNT <- UG_COUNT[-1, ] # Ignore the NO Values Found when classified for both UG_LOCATION and UG_MINING_METHOD
+
+ggplot(data = UG_COUNT, mapping = aes(x = UG_LOCATION, y = n)) +
+  geom_point(aes(colour = UG_MINING_METHOD)) +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  xlab("UG Location") +
+  ylab("Num. of Accidents") +
+  ggtitle("Number of Accidents in Underground (UG) location classified by mining method") +
+  theme(plot.title = element_text(size=15, face="bold")) +
+  labs(colour = "Mining Method")
+```
+
+The graph above shows that performing continuous mining in Intersection, Last open crosscut and ther areas can result in a high number of accidents.
+
+```{r comment=NA}
+mining_equipment_UG <- small_data[which(small_data$UG_LOCATION != "NO VALUE FOUND"), ] # Find all mining equipment used underground
+no_value_mining_eqipment_UG <- length(which(mining_equipment_UG$MINING_EQUIP == "NO VALUE FOUND")) # Calculate the number of the NO VALUE FOUND equipment
+percentage_no_value_mining_eqipment_UG <- percent(no_value_mining_eqipment_UG/length(mining_equipment_UG$MINING_EQUIP)) # Calculate the percentage of the NO VALUE FOUND
+cat(sprintf("There are %i no values found MINING_EQUIP column that is also in the UG_LOCATION category which amount to %s. Since the record mentions no values found, it can be ignored", no_value_mining_eqipment_UG, percentage_no_value_mining_eqipment_UG))
+```
+```{r fig.width=11.5}
+mining_equipment_UG <- mining_equipment_UG[which(mining_equipment_UG$MINING_EQUIP != "NO VALUE FOUND"), ] # Ignore the NO VALUE FOUND EQUIPMENT
+display_top_15_barchart(mining_equipment_UG$MINING_EQUIP, "Equipments", "Num. of Accidents", "Top 15 Equipment classified that caused most accidents in the Underground")
+```
+
+The bar chart above shows that hand tools caused the most number of accidents in the underground mining locations.
+
+### Exploring Equipment Manufacturer
+
+```{r comment=NA, fig.width=10}
+No_value_found_count <- length(which(small_data$EQUIP_MFR_NAME == "NO VALUE FOUND"))
+No_value_found_percent <- percent(No_value_found_count/2000)
+Not_reported_count <- length(which(small_data$EQUIP_MFR_NAME == "Not Reported"))
+Not_reported_percent <- percent(Not_reported_count/2000)
+Not_listed_count <- length(which(small_data$EQUIP_MFR_NAME == "Not listed"))
+Not_listed_percent <- percent(Not_listed_count/2000)
+
+cat(sprintf("There are %i no values found recorded for equipment manufacturer which account to %s of the total recorded accidents. There are also %i of equipment manufacturer no reported which accounts to %s of the total recorded accidents. There are %i of equipment manufacturer not listed which is %s of the total recorded accidents. These counts will be ignored for the top 15 equipment manufacturer chart.", No_value_found_count, No_value_found_percent, Not_reported_count, Not_reported_percent, Not_listed_count, Not_listed_percent))
+
+equipment_mfr <- small_data[-which(small_data$EQUIP_MFR_NAME == "NO VALUE FOUND"), ]
+equipment_mfr <- equipment_mfr[-which(equipment_mfr$EQUIP_MFR_NAME == "Not Reported"), ]
+equipment_mfr <- equipment_mfr[-which(equipment_mfr$EQUIP_MFR_NAME == "Not listed"), ]
+display_top_15_barchart(equipment_mfr$EQUIP_MFR_NAME, "Equipments MFR", "Num. of Accidents", "Top 15 number of accidents by the recorded equipment manufacturer")
+```
+
+Caterpillar is a popular and well known brand in the mining industry and it has obviously shows that it has cause the most accidents but there are other manufacturer that are not on the list which accounts to 112 of the accidents.
+
+<div align="center">_**Final Edit Date: 04/09/2022**_</div>
